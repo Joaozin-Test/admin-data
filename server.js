@@ -27,7 +27,7 @@ export default {
 
         const now = Date.now();
 
-        // --- JOB ID ---
+        // --- JOBID ---
         if (method === "POST" && url.pathname === "/api/manox/send-jobid") {
             const { username, placeId, jobId } = await getBody();
             if (!username || !placeId || !jobId) return jsonResponse({ error: "Dados incompletos." }, 400);
