@@ -18,11 +18,12 @@ export default {
             headers: { 
                 "Content-Type": "application/json", 
                 "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "*"
+                "Access-Control-Allow-Headers": "Content-Type, x-manox-key",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS"
             }
         });
 
-        // Suporte a requisições OPTIONS (CORS Preflight) para painéis administrativos Web
+        // --- SUPORTE A CORS PREFLIGHT (OBRIGATÓRIO PARA SITES WEB) ---
         if (method === "OPTIONS") {
             return new Response(null, {
                 status: 204,
@@ -36,40 +37,23 @@ export default {
 
         const getBody = async () => { try { return await request.json(); } catch { return {}; } };
 
-// Função de verificação robusta (procura 'key' ou 'Key' ignorando maiúsculas/minúsculas)
-const checkAdminKey = () => {
-    // 1. Busca nos Headers
-    const headerKey = request.headers.get("x-manox-key") || request.headers.get("X-Manox-Key");
-    
-    // 2. Busca nos Query Parameters (Varre todos para encontrar key ou Key sem erro)
-    let queryKey = null;
-    for (const [paramKey, paramValue] of url.searchParams.entries()) {
-        if (paramKey.toLowerCase() === "key") {
-            queryKey = paramValue;
-            break;
+        // Validação estrita via Header 'x-manox-key'
+        const checkAdminKey = () => {
+            const clientKey = request.headers.get("x-manox-key");
+            return clientKey && clientKey === env.ADMIN_API_KEY;
+        };
+
+        const now = Date.now();
+
+        // --- ROTA DE VERIFICAÇÃO DE CHAVE (VIA HEADER X-MANOX-KEY) ---
+        if (url.pathname === "/api/manox/verify") {
+            const isValid = checkAdminKey();
+            if (isValid) {
+                return jsonResponse({ valid: true, message: "Chave válida!" }, 200);
+            } else {
+                return jsonResponse({ valid: false, message: "Chave incorreta ou ausente." }, 401);
+            }
         }
-    }
-
-    const clientKey = (headerKey || queryKey || "").trim();
-    const serverKey = (env.ADMIN_API_KEY || "").trim();
-
-    return clientKey !== "" && clientKey === serverKey;
-};
-
-// --- ROTA DE VERIFICAÇÃO DE CHAVE ---
-if (url.pathname === "/api/manox/verify") {
-    const isValid = checkAdminKey();
-    if (isValid) {
-        return jsonResponse({ valid: true, message: "Chave válida!" }, 200);
-    } else {
-        return jsonResponse({ 
-            valid: false, 
-            message: "Chave inválida ou não fornecida.",
-            // Útil para debug local (remova se preferir):
-            receivedKeyProvided: url.searchParams.has("key") || url.searchParams.has("Key") || request.headers.has("x-manox-key")
-        }, 401);
-    }
-}
 
         // --- JOB ID ---
         if (method === "POST" && url.pathname === "/api/manox/send-jobid") {
