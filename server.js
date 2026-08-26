@@ -46,7 +46,7 @@ export default {
         const now = Date.now();
 
         // --- ROTA DE VERIFICAÇÃO DE CHAVE (VIA HEADER X-MANOX-KEY) ---
-        if (url.pathname === "/api/manox/verify") {
+        if (method === "GET" && url.pathname === "/api/manox/verify") {
             const isValid = checkAdminKey();
             if (isValid) {
                 return jsonResponse({ valid: true, message: "Chave válida!" }, 200);
