@@ -15,17 +15,47 @@ export default {
 
         const jsonResponse = (data, status = 200) => new Response(JSON.stringify(data), {
             status,
-            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+            headers: { 
+                "Content-Type": "application/json", 
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*"
+            }
         });
+
+        // Suporte a requisições OPTIONS (CORS Preflight) para painéis administrativos Web
+        if (method === "OPTIONS") {
+            return new Response(null, {
+                status: 204,
+                headers: {
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type, x-manox-key"
+                }
+            });
+        }
 
         const getBody = async () => { try { return await request.json(); } catch { return {}; } };
 
+        // Função para validar a chave (Aceita Header 'x-manox-key' ou Query Param '?key=' / '?Key=')
         const checkAdminKey = () => {
-            const clientKey = request.headers.get("x-manox-key");
+            const headerKey = request.headers.get("x-manox-key");
+            const queryKey = url.searchParams.get("key") || url.searchParams.get("Key");
+            const clientKey = headerKey || queryKey;
+            
             return clientKey && clientKey === env.ADMIN_API_KEY;
         };
 
         const now = Date.now();
+
+        // --- ROTA DE VERIFICAÇÃO DE CHAVE (PARA SITES ADMINISTRATIVOS) ---
+        if (url.pathname === "/api/manox/verify") {
+            const isValid = checkAdminKey();
+            if (isValid) {
+                return jsonResponse({ valid: true, message: "Chave válida!" }, 200);
+            } else {
+                return jsonResponse({ valid: false, message: "Chave inválida ou não fornecida." }, 401);
+            }
+        }
 
         // --- JOB ID ---
         if (method === "POST" && url.pathname === "/api/manox/send-jobid") {
@@ -89,7 +119,6 @@ export default {
             const { username, durationMinutes } = await getBody();
             if (!username) return jsonResponse({ success: false, message: "Username necessário" }, 400);
 
-            // Tempo customizado em minutos (Padrão: 60 min)
             const minutes = durationMinutes && Number(durationMinutes) > 0 ? Number(durationMinutes) : 60;
             const expiresAt = now + (minutes * 60 * 1000);
 
@@ -109,7 +138,6 @@ export default {
 
             let newExpiresAt = expiresAt;
 
-            // Se enviar addMinutes, soma minutos ao tempo atual
             if (!newExpiresAt && addMinutes) {
                 newExpiresAt = now + (Number(addMinutes) * 60 * 1000);
             }
