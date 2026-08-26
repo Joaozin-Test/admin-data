@@ -49,7 +49,8 @@ export default {
 
         // --- ROTA DE VERIFICAÇÃO DE CHAVE (PARA SITES ADMINISTRATIVOS) ---
         if (url.pathname === "/api/manox/verify") {
-            const isValid = checkAdminKey();
+            const queryKey = url.searchParams.get("key") === env.ADMIN_API_KEY || url.searchParams.get("Key") === env.ADMIN_API_KEY;
+            const isValid = queryKey;
             if (isValid) {
                 return jsonResponse({ valid: true, message: "Chave válida!" }, 200);
             } else {
