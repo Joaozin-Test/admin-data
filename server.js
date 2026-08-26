@@ -36,27 +36,40 @@ export default {
 
         const getBody = async () => { try { return await request.json(); } catch { return {}; } };
 
-        // Função para validar a chave (Aceita Header 'x-manox-key' ou Query Param '?key=' / '?Key=')
-        const checkAdminKey = () => {
-            const headerKey = request.headers.get("x-manox-key");
-            const queryKey = url.searchParams.get("key") || url.searchParams.get("Key");
-            const clientKey = headerKey || queryKey;
-            
-            return clientKey && clientKey === env.ADMIN_API_KEY;
-        };
-
-        const now = Date.now();
-
-        // --- ROTA DE VERIFICAÇÃO DE CHAVE (PARA SITES ADMINISTRATIVOS) ---
-        if (url.pathname === "/api/manox/verify") {
-            const queryKey = url.searchParams.get("key") === env.ADMIN_API_KEY || url.searchParams.get("Key") === env.ADMIN_API_KEY;
-            const isValid = queryKey;
-            if (isValid) {
-                return jsonResponse({ valid: true, message: "Chave válida!" }, 200);
-            } else {
-                return jsonResponse({ valid: false, message: "Chave inválida ou não fornecida." }, 401);
-            }
+// Função de verificação robusta (procura 'key' ou 'Key' ignorando maiúsculas/minúsculas)
+const checkAdminKey = () => {
+    // 1. Busca nos Headers
+    const headerKey = request.headers.get("x-manox-key") || request.headers.get("X-Manox-Key");
+    
+    // 2. Busca nos Query Parameters (Varre todos para encontrar key ou Key sem erro)
+    let queryKey = null;
+    for (const [paramKey, paramValue] of url.searchParams.entries()) {
+        if (paramKey.toLowerCase() === "key") {
+            queryKey = paramValue;
+            break;
         }
+    }
+
+    const clientKey = (headerKey || queryKey || "").trim();
+    const serverKey = (env.ADMIN_API_KEY || "").trim();
+
+    return clientKey !== "" && clientKey === serverKey;
+};
+
+// --- ROTA DE VERIFICAÇÃO DE CHAVE ---
+if (url.pathname === "/api/manox/verify") {
+    const isValid = checkAdminKey();
+    if (isValid) {
+        return jsonResponse({ valid: true, message: "Chave válida!" }, 200);
+    } else {
+        return jsonResponse({ 
+            valid: false, 
+            message: "Chave inválida ou não fornecida.",
+            // Útil para debug local (remova se preferir):
+            receivedKeyProvided: url.searchParams.has("key") || url.searchParams.has("Key") || request.headers.has("x-manox-key")
+        }, 401);
+    }
+}
 
         // --- JOB ID ---
         if (method === "POST" && url.pathname === "/api/manox/send-jobid") {
