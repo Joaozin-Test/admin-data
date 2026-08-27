@@ -265,6 +265,111 @@ export default {
             return jsonResponse({ success: true, message: "Chat do servidor limpo." });
         }
 
+        // ==========================================
+// ROBLOX USER LOOKUP
+// ==========================================
+
+if (
+    method === "GET" &&
+    url.pathname === "/api/manox/roblox-user"
+) {
+    const username = url.searchParams.get("username");
+
+    if (!username) {
+        return jsonResponse({
+            success: false,
+            message: "Username necessário"
+        }, 400);
+    }
+
+    try {
+        // Buscar usuário pelo username
+        const robloxResponse = await fetch(
+            "https://users.roblox.com/v1/usernames/users",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    usernames: [username.trim()],
+                    excludeBannedUsers: false
+                })
+            }
+        );
+
+        if (!robloxResponse.ok) {
+            return jsonResponse({
+                success: false,
+                message: "Erro ao consultar Roblox"
+            }, 502);
+        }
+
+        const robloxData =
+            await robloxResponse.json();
+
+        const user =
+            robloxData.data &&
+            robloxData.data[0];
+
+        // Usuário não existe
+        if (!user) {
+            return jsonResponse({
+                success: true,
+                exists: false,
+                username: username.trim()
+            });
+        }
+
+        const userId = user.id;
+
+        // Buscar avatar
+        let avatar = null;
+
+        try {
+            const thumbnailResponse =
+                await fetch(
+                    "https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=" +
+                    encodeURIComponent(userId) +
+                    "&size=150x150&format=Png&isCircular=false"
+                );
+
+            if (thumbnailResponse.ok) {
+                const thumbnailData =
+                    await thumbnailResponse.json();
+
+                if (
+                    thumbnailData.data &&
+                    thumbnailData.data[0]
+                ) {
+                    avatar =
+                        thumbnailData.data[0].imageUrl || null;
+                }
+            }
+        } catch (error) {
+            console.error(
+                "Erro ao buscar avatar:",
+                error
+            );
+        }
+
+        return jsonResponse({
+            success: true,
+            exists: true,
+            userId: userId,
+            username: user.name,
+            displayName: user.displayName,
+            avatar: avatar
+        });
+
+    } catch (error) {
+        return jsonResponse({
+            success: false,
+            message: "Erro ao consultar dados do Roblox"
+        }, 500);
+    }
+}
+
         return jsonResponse({ success: false, message: "Rota não encontrada" }, 404);
     }
 };
