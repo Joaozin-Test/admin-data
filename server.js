@@ -507,6 +507,89 @@ if (method === "POST" && url.pathname === "/api/manox/version/update") {
     });
 }
 
+// GET /api/manox/test-script (public read)
+if (method === "GET" && url.pathname === "/api/manox/test-script") {
+    const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/test_scripts?id=eq.1&select=script,updated_at&limit=1`,
+        { headers }
+    );
+
+    if (!res.ok) {
+        return jsonResponse({
+            success: false,
+            message: "Não foi possível carregar o Test Script."
+        }, 500);
+    }
+
+    const rows = await res.json();
+    const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+
+    return jsonResponse({
+        success: true,
+        script: row && typeof row.script === "string" ? row.script : "",
+        updatedAt: row ? Number(row.updated_at) || null : null
+    });
+}
+
+// POST /api/manox/test-script (admin only)
+if (method === "POST" && url.pathname === "/api/manox/test-script") {
+    if (!checkAdminKey()) {
+        return jsonResponse({
+            success: false,
+            message: "Não autorizado."
+        }, 401);
+    }
+
+    const body = await getBody();
+    if (typeof body.script !== "string") {
+        return jsonResponse({
+            success: false,
+            message: "O campo 'script' precisa ser um texto."
+        }, 400);
+    }
+
+    // Limite de segurança: 2 MB de texto.
+    if (body.script.length > 2000000) {
+        return jsonResponse({
+            success: false,
+            message: "O script ultrapassa o limite de 2 MB."
+        }, 413);
+    }
+
+    const updatedAt = Date.now();
+    const saveRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/test_scripts?on_conflict=id`,
+        {
+            method: "POST",
+            headers: {
+                ...headers,
+                "Prefer": "resolution=merge-duplicates,return=representation"
+            },
+            body: JSON.stringify({
+                id: 1,
+                script: body.script,
+                updated_at: updatedAt
+            })
+        }
+    );
+
+    if (!saveRes.ok) {
+        const details = await saveRes.text();
+        console.error("Erro ao salvar Test Script:", details);
+
+        return jsonResponse({
+            success: false,
+            message: "Erro ao salvar o Test Script no Supabase."
+        }, 500);
+    }
+
+    return jsonResponse({
+        success: true,
+        message: "Test Script salvo com sucesso.",
+        updatedAt
+    });
+}
+
         return jsonResponse({ success: false, message: "Rota não encontrada" }, 404);
     }
 };
