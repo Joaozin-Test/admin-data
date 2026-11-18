@@ -590,6 +590,186 @@ if (method === "POST" && url.pathname === "/api/manox/test-script") {
     });
 }
 
+const manoxKeyHash = async (value) => {
+    const digest = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(value)
+    );
+    return [...new Uint8Array(digest)]
+        .map(byte => byte.toString(16).padStart(2, "0"))
+        .join("");
+};
+
+const manoxKeyPart = (length = 4) => {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const bytes = crypto.getRandomValues(new Uint8Array(length));
+    return [...bytes].map(byte => alphabet[byte & 31]).join("");
+};
+
+const manoxMakeKey = () =>
+    `MANOX-${manoxKeyPart()}-${manoxKeyPart()}-${manoxKeyPart()}`;
+
+const manoxKeyStatus = (row) => {
+    if (row.revoked_at) return "INVÁLIDA";
+    if (row.expires_at && new Date(row.expires_at).getTime() <= Date.now()) return "EXPIRADA";
+    return row.client_id ? "USADA" : "ATIVA";
+};
+
+const manoxPublicKey = (row) => ({
+    id: row.id,
+    key_hint: row.key_hint,
+    status: manoxKeyStatus(row),
+    client_id: row.client_id,
+    created_at: row.created_at,
+    expires_at: row.expires_at,
+    used_at: row.used_at,
+    revoked_at: row.revoked_at
+});
+
+const manoxKeyDuration = (body) => {
+    const presets = {
+        "1d": 86400,
+        "7d": 604800,
+        "15d": 1296000,
+        "30d": 2592000,
+        "60d": 5184000
+    };
+    if (body.duration === "permanent") return null;
+    if (presets[body.duration]) return presets[body.duration];
+    if (body.duration !== "custom") throw new Error("Duração inválida.");
+    const amount = Number(body.amount);
+    const factors = { minutes: 60, hours: 3600, days: 86400 };
+    if (!Number.isInteger(amount) || amount < 1 || amount > 36500 || !factors[body.unit]) {
+        throw new Error("Duração personalizada inválida.");
+    }
+    return amount * factors[body.unit];
+};
+
+// GERAÇÃO — ADMIN
+if (method === "POST" && url.pathname === "/api/manox/keys/generate") {
+    if (!checkAdminKey()) return jsonResponse({ success: false, message: "Não autorizado." }, 401);
+    try {
+        const body = await getBody();
+        const count = Number(body.count);
+        if (!Number.isInteger(count) || count < 1 || count > 100) {
+            return jsonResponse({ success: false, message: "Quantidade deve ser entre 1 e 100." }, 400);
+        }
+        const seconds = manoxKeyDuration(body);
+        const createdAt = Date.now();
+        const keys = [];
+        const inserts = [];
+
+        for (let i = 0; i < count; i++) {
+            const key = manoxMakeKey();
+            keys.push({ key });
+            inserts.push({
+                key_hash: await manoxKeyHash(key),
+                key_hint: key.slice(0, 10) + "-••••",
+                expires_at: seconds === null ? null : new Date(createdAt + seconds * 1000).toISOString()
+            });
+        }
+
+        const saveRes = await fetch(`${SUPABASE_URL}/rest/v1/manox_keys`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(inserts)
+        });
+        if (!saveRes.ok) {
+            console.error("Manox Keys insert:", await saveRes.text());
+            return jsonResponse({ success: false, message: "Não foi possível salvar as Keys." }, 500);
+        }
+        return jsonResponse({ success: true, count: keys.length, keys }, 201);
+    } catch (error) {
+        return jsonResponse({ success: false, message: error.message || "Erro ao gerar Keys." }, 400);
+    }
+}
+
+// LISTAGEM — ADMIN
+if (method === "GET" && url.pathname === "/api/manox/keys") {
+    if (!checkAdminKey()) return jsonResponse({ success: false, message: "Não autorizado." }, 401);
+    const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/manox_keys?select=id,key_hint,client_id,created_at,expires_at,used_at,revoked_at&order=created_at.desc&limit=500`,
+        { headers }
+    );
+    if (!res.ok) return jsonResponse({ success: false, message: "Erro ao consultar Keys." }, 500);
+    const rows = await res.json();
+    return jsonResponse({ success: true, keys: Array.isArray(rows) ? rows.map(manoxPublicKey) : [] });
+}
+
+// REVOGAÇÃO — ADMIN
+const manoxRevokeMatch = url.pathname.match(/^\/api\/manox\/keys\/([0-9a-f-]+)$/i);
+if (method === "PATCH" && manoxRevokeMatch) {
+    if (!checkAdminKey()) return jsonResponse({ success: false, message: "Não autorizado." }, 401);
+    const body = await getBody();
+    if (body.revoke !== true) return jsonResponse({ success: false, message: "Ação inválida." }, 400);
+    const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/manox_keys?id=eq.${manoxRevokeMatch[1]}`,
+        { method: "PATCH", headers, body: JSON.stringify({ revoked_at: new Date().toISOString() }) }
+    );
+    if (!res.ok) return jsonResponse({ success: false, message: "Erro ao revogar Key." }, 500);
+    const rows = await res.json();
+    if (!Array.isArray(rows) || !rows.length) return jsonResponse({ success: false, message: "Key não encontrada." }, 404);
+    return jsonResponse({ success: true, key: manoxPublicKey(rows[0]) });
+}
+
+// VALIDAÇÃO — PÚBLICA, COM VÍNCULO AO PRIMEIRO CLIENT ID
+if (method === "POST" && url.pathname === "/api/manox/keys/validate") {
+    const body = await getBody();
+    const key = String(body.key || "").trim().toUpperCase();
+    const clientId = String(body.clientId || "").trim();
+
+    if (!/^MANOX-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(key) ||
+        !clientId || clientId.length > 200) {
+        return jsonResponse({ valid: false, status: "INVÁLIDA" }, 400);
+    }
+
+    const hash = await manoxKeyHash(key);
+    const findRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/manox_keys?key_hash=eq.${hash}&select=id,client_id,expires_at,revoked_at,used_at&limit=1`,
+        { headers }
+    );
+    if (!findRes.ok) return jsonResponse({ valid: false, status: "ERRO" }, 500);
+    const found = await findRes.json();
+    if (!Array.isArray(found) || !found.length) {
+        return jsonResponse({ valid: false, status: "INVÁLIDA" });
+    }
+
+    const row = found[0];
+    const status = manoxKeyStatus(row);
+    if (status === "INVÁLIDA" || status === "EXPIRADA") {
+        return jsonResponse({ valid: false, status });
+    }
+    if (row.client_id && row.client_id !== clientId) {
+        return jsonResponse({ valid: false, status: "INVÁLIDA", message: "Key vinculada a outro ClientId." });
+    }
+
+    if (!row.client_id) {
+        // Atualização condicional para evitar que dois ClientIds vinculem a mesma Key simultaneamente.
+        const bindRes = await fetch(
+            `${SUPABASE_URL}/rest/v1/manox_keys?id=eq.${row.id}&client_id=is.null&revoked_at=is.null`,
+            {
+                method: "PATCH",
+                headers,
+                body: JSON.stringify({ client_id: clientId, used_at: new Date().toISOString() })
+            }
+        );
+        if (!bindRes.ok) return jsonResponse({ valid: false, status: "ERRO" }, 500);
+        const bound = await bindRes.json();
+        if (!Array.isArray(bound) || !bound.length) {
+            // Releitura: pode ter sido vinculada por uma requisição concorrente.
+            const rereadRes = await fetch(
+                `${SUPABASE_URL}/rest/v1/manox_keys?id=eq.${row.id}&select=client_id,expires_at,revoked_at`,
+                { headers }
+            );
+            const reread = await rereadRes.json();
+            if (!Array.isArray(reread) || !reread.length || reread[0].client_id !== clientId) {
+                return jsonResponse({ valid: false, status: "INVÁLIDA" });
+            }
+        }
+    }
+    return jsonResponse({ valid: true, status: "USADA", clientId });
+}
+
         return jsonResponse({ success: false, message: "Rota não encontrada" }, 404);
     }
 };
